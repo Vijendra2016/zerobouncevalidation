@@ -3,16 +3,27 @@ import { NextResponse } from "next/server";
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const email = body?.data?.email as string | undefined;
+
+    // Support both formats:
+    // Klaviyo Preview/Test:  { "email": "..." }
+    // Klaviyo Flow Event:    { "data": { "email": "..." } }
+    const email =
+      body?.email ||
+      body?.data?.email ||
+      body?.profile?.email || // some flows send profile.email
+      null;
 
     if (!email) {
-      return NextResponse.json({ error: "Email not provided" }, { status: 400 });
+      return NextResponse.json(
+        { error: "Email not provided in webhook body" },
+        { status: 400 }
+      );
     }
 
     const ZEROBOUNCE_API_KEY = process.env.ZEROBOUNCE_API_KEY!;
     const KLAVIYO_PRIVATE_KEY = process.env.KLAVIYO_PRIVATE_KEY!;
 
-    // 1️⃣ Query ZeroBounce
+    // 1️⃣ Call ZeroBounce
     const zbUrl = `https://api.zerobounce.net/v2/validate?api_key=${ZEROBOUNCE_API_KEY}&email=${encodeURIComponent(
       email
     )}`;
@@ -25,7 +36,7 @@ export async function POST(req: Request) {
     const suggestion = zbData.did_you_mean;
     const is_valid = status === "valid";
 
-    // 2️⃣ Update Klaviyo Profile
+    // 2️⃣ Update Klaviyo profile
     await fetch("https://a.klaviyo.com/api/profiles/", {
       method: "POST",
       headers: {
@@ -42,7 +53,7 @@ export async function POST(req: Request) {
               zb_status: status,
               zb_sub_status: sub_status,
               zb_is_valid: is_valid,
-              zb_suggestion: suggestion,
+              zb_suggestion: suggestion ?? null,
             },
           },
         },
@@ -56,8 +67,8 @@ export async function POST(req: Request) {
       suggestion,
       is_valid,
     });
-  } catch (err) {
-    console.error("Webhook error:", err);
+  } catch (error) {
+    console.error("Webhook error:", error);
     return NextResponse.json({ error: "Webhook failed" }, { status: 500 });
   }
 }
