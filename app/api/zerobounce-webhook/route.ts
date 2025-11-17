@@ -81,7 +81,7 @@ export async function POST(req: Request) {
             type: "profile",
             attributes: {
               properties: {
-                zb_status: status,
+                "ZB Status": status,
                 zb_sub_status: sub_status,
                 zb_is_valid: is_valid,
                 zb_suggestion: suggestion ?? null,
