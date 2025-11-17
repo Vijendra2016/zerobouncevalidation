@@ -4,7 +4,7 @@ export async function POST(req: Request) {
   try {
     const body = await req.json();
 
-    // Get email from any of the structures Klaviyo might send
+    // Extract email from any Klaviyo structure
     const email =
       body?.email ||
       body?.data?.email ||
@@ -21,12 +21,13 @@ export async function POST(req: Request) {
     const ZEROBOUNCE_API_KEY = process.env.ZEROBOUNCE_API_KEY!;
     const KLAVIYO_PRIVATE_KEY = process.env.KLAVIYO_PRIVATE_KEY!;
 
-    // 1️⃣ Validate with ZeroBounce
+    // 1️⃣ Validate email with ZeroBounce
     const zbResponse = await fetch(
       `https://api.zerobounce.net/v2/validate?api_key=${ZEROBOUNCE_API_KEY}&email=${encodeURIComponent(
         email
       )}`
     );
+
     const zbData = await zbResponse.json();
 
     const status = zbData.status;
@@ -34,22 +35,24 @@ export async function POST(req: Request) {
     const suggestion = zbData.did_you_mean;
     const is_valid = status === "valid";
 
-    // 2️⃣ Look up profile in Klaviyo (real profiles only)
-    const lookupRes = await fetch(
-      `https://a.klaviyo.com/api/profiles?filter=equals(email,"${email}")`,
-      {
-        headers: {
-          Authorization: `Klaviyo-API-Key ${KLAVIYO_PRIVATE_KEY}`,
-          revision: "2023-02-22",
-        },
-      }
-    );
+    // 2️⃣ Klaviyo Profile Lookup (FIXED + ENCODED)
+    const encodedEmail = encodeURIComponent(email);
+
+    const lookupUrl = `https://a.klaviyo.com/api/profiles?filter=equals(email,%22${encodedEmail}%22)`;
+
+    const lookupRes = await fetch(lookupUrl, {
+      headers: {
+        Authorization: `Klaviyo-API-Key ${KLAVIYO_PRIVATE_KEY}`,
+        revision: "2023-02-22",
+      },
+    });
 
     const lookupJson = await lookupRes.json();
 
-    // 3️⃣ If profile doesn't exist (Preview Mode), skip update but return success
+    // 3️⃣ Preview Mode or Profile Does Not Exist
     if (!lookupJson.data || lookupJson.data.length === 0) {
       console.log("Preview mode or profile not found:", email);
+
       return NextResponse.json({
         email,
         status,
@@ -62,7 +65,7 @@ export async function POST(req: Request) {
 
     const profileId = lookupJson.data[0].id;
 
-    // 4️⃣ Patch the profile
+    // 4️⃣ Update (PATCH) Klaviyo Profile
     const updateRes = await fetch(
       `https://a.klaviyo.com/api/profiles/${profileId}`,
       {
@@ -99,6 +102,7 @@ export async function POST(req: Request) {
       );
     }
 
+    // 5️⃣ Success Response
     return NextResponse.json({
       email,
       status,
