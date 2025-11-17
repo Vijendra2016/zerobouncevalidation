@@ -1,5 +1,4 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import axios from "axios";
 
 // Types for ZeroBounce response
 interface ZeroBounceResponse {
@@ -7,21 +6,10 @@ interface ZeroBounceResponse {
   status: string;
   sub_status: string;
   did_you_mean: string | null;
-  free_email: boolean;
-  mx_found: boolean;
-  mx_record: string | null;
-  smtp_provider: string | null;
-  firstname: string | null;
-  lastname: string | null;
-  gender: string | null;
-  country: string | null;
-  region: string | null;
-  city: string | null;
-  zipcode: string | null;
   processed_at: string;
 }
 
-// Types for Klaviyo profile update
+// Klaviyo payload structure
 interface KlaviyoProfileUpdate {
   data: {
     type: "profile";
@@ -45,41 +33,36 @@ export default async function handler(
     return res.status(405).json({ message: "Only POST allowed" });
   }
 
+  const email = req.body?.data?.email as string | undefined;
+
+  if (!email) {
+    return res.status(400).json({ error: "Email not provided" });
+  }
+
+  const ZEROBOUNCE_API_KEY = process.env.ZEROBOUNCE_API_KEY;
+  const KLAVIYO_PRIVATE_KEY = process.env.KLAVIYO_PRIVATE_KEY;
+
+  if (!ZEROBOUNCE_API_KEY || !KLAVIYO_PRIVATE_KEY) {
+    return res.status(500).json({
+      error: "Missing ZEROBOUNCE_API_KEY or KLAVIYO_PRIVATE_KEY",
+    });
+  }
+
   try {
-    const email = req.body?.data?.email as string | undefined;
+    // 1️⃣ ZeroBounce validation (fetch instead of axios)
+    const zbUrl = `https://api.zerobounce.net/v2/validate?api_key=${ZEROBOUNCE_API_KEY}&email=${encodeURIComponent(
+      email
+    )}`;
 
-    if (!email) {
-      return res.status(400).json({ error: "Email not provided" });
-    }
+    const zbResponse = await fetch(zbUrl);
+    const zbData: ZeroBounceResponse = await zbResponse.json();
 
-    const ZEROBOUNCE_API_KEY = process.env.ZEROBOUNCE_API_KEY;
-    const KLAVIYO_PRIVATE_KEY = process.env.KLAVIYO_PRIVATE_KEY;
-
-    if (!ZEROBOUNCE_API_KEY || !KLAVIYO_PRIVATE_KEY) {
-      return res.status(500).json({
-        error: "Missing environment variables: ZEROBOUNCE_API_KEY or KLAVIYO_PRIVATE_KEY",
-      });
-    }
-
-    // 1️⃣ Validate email via ZeroBounce
-    const zbResponse = await axios.get<ZeroBounceResponse>(
-      "https://api.zerobounce.net/v2/validate",
-      {
-        params: {
-          api_key: ZEROBOUNCE_API_KEY,
-          email,
-        },
-      }
-    );
-
-    const result = zbResponse.data;
-
-    const status = result.status;
-    const sub_status = result.sub_status;
-    const suggestion = result.did_you_mean;
+    const status = zbData.status;
+    const sub_status = zbData.sub_status;
+    const suggestion = zbData.did_you_mean;
     const is_valid = status === "valid";
 
-    // 2️⃣ Build Klaviyo Profile payload
+    // 2️⃣ Build Klaviyo payload
     const profileUpdate: KlaviyoProfileUpdate = {
       data: {
         type: "profile",
@@ -95,14 +78,21 @@ export default async function handler(
       },
     };
 
-    // 3️⃣ Update Klaviyo Profile
-    await axios.post("https://a.klaviyo.com/api/profiles/", profileUpdate, {
+    // 3️⃣ Send update to Klaviyo
+    const klaviyoResponse = await fetch("https://a.klaviyo.com/api/profiles/", {
+      method: "POST",
       headers: {
         Authorization: `Klaviyo-API-Key ${KLAVIYO_PRIVATE_KEY}`,
         "Content-Type": "application/json",
         revision: "2023-02-22",
       },
+      body: JSON.stringify(profileUpdate),
     });
+
+    if (!klaviyoResponse.ok) {
+      const errorText = await klaviyoResponse.text();
+      console.error("Klaviyo update failed:", errorText);
+    }
 
     return res.status(200).json({
       email,
@@ -111,8 +101,8 @@ export default async function handler(
       suggestion,
       is_valid,
     });
-  } catch (error: any) {
-    console.error("Webhook error:", error.response?.data || error);
+  } catch (error) {
+    console.error("Webhook error:", error);
     return res.status(500).json({ error: "Webhook failed" });
   }
 }
