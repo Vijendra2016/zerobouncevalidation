@@ -4,6 +4,7 @@ export async function POST(req: Request) {
   try {
     const body = await req.json();
 
+    // Get email from any of the structures Klaviyo might send
     const email =
       body?.email ||
       body?.data?.email ||
@@ -20,12 +21,12 @@ export async function POST(req: Request) {
     const ZEROBOUNCE_API_KEY = process.env.ZEROBOUNCE_API_KEY!;
     const KLAVIYO_PRIVATE_KEY = process.env.KLAVIYO_PRIVATE_KEY!;
 
-    // 1️⃣ ZeroBounce validation
-    const zbUrl = `https://api.zerobounce.net/v2/validate?api_key=${ZEROBOUNCE_API_KEY}&email=${encodeURIComponent(
-      email
-    )}`;
-
-    const zbResponse = await fetch(zbUrl);
+    // 1️⃣ Validate with ZeroBounce
+    const zbResponse = await fetch(
+      `https://api.zerobounce.net/v2/validate?api_key=${ZEROBOUNCE_API_KEY}&email=${encodeURIComponent(
+        email
+      )}`
+    );
     const zbData = await zbResponse.json();
 
     const status = zbData.status;
@@ -33,29 +34,35 @@ export async function POST(req: Request) {
     const suggestion = zbData.did_you_mean;
     const is_valid = status === "valid";
 
-    // 2️⃣ Lookup Klaviyo Profile by Email
-    const lookupUrl = `https://a.klaviyo.com/api/profiles?filter=equals(email,"${email}")`;
-
-    const lookupRes = await fetch(lookupUrl, {
-      headers: {
-        Authorization: `Klaviyo-API-Key ${KLAVIYO_PRIVATE_KEY}`,
-        revision: "2023-02-22",
-      },
-    });
+    // 2️⃣ Look up profile in Klaviyo (real profiles only)
+    const lookupRes = await fetch(
+      `https://a.klaviyo.com/api/profiles?filter=equals(email,"${email}")`,
+      {
+        headers: {
+          Authorization: `Klaviyo-API-Key ${KLAVIYO_PRIVATE_KEY}`,
+          revision: "2023-02-22",
+        },
+      }
+    );
 
     const lookupJson = await lookupRes.json();
 
+    // 3️⃣ If profile doesn't exist (Preview Mode), skip update but return success
     if (!lookupJson.data || lookupJson.data.length === 0) {
-      console.error("Profile not found:", email);
-      return NextResponse.json(
-        { error: "Profile not found in Klaviyo" },
-        { status: 404 }
-      );
+      console.log("Preview mode or profile not found:", email);
+      return NextResponse.json({
+        email,
+        status,
+        sub_status,
+        suggestion,
+        is_valid,
+        note: "Preview mode - profile not updated",
+      });
     }
 
     const profileId = lookupJson.data[0].id;
 
-    // 3️⃣ PATCH (update) the profile
+    // 4️⃣ Patch the profile
     const updateRes = await fetch(
       `https://a.klaviyo.com/api/profiles/${profileId}`,
       {
@@ -92,18 +99,20 @@ export async function POST(req: Request) {
       );
     }
 
-    console.log("Klaviyo update success:", updateJson);
-
     return NextResponse.json({
       email,
       status,
       sub_status,
       suggestion,
       is_valid,
+      updated: true,
     });
-  } catch (error) {
-    console.error("Webhook error:", error);
-    return NextResponse.json({ error: "Webhook failed" }, { status: 500 });
+  } catch (err) {
+    console.error("Webhook error:", err);
+    return NextResponse.json(
+      { error: "Webhook failed", details: err },
+      { status: 500 }
+    );
   }
 }
 
